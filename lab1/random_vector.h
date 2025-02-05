@@ -1,5 +1,6 @@
 #include <iostream>
 #include <vector>
+#include <random>
 
 class RandomVector{
   std::vector<double> vect;

@@ -13,15 +13,13 @@ class FramesPublisherNode : public rclcpp::Node {
 
   rclcpp::TimerBase::SharedPtr heartbeat;
 
-  // TODO: Declare a std::unique_ptr<tf2_ros::TransformBroadcaster>
+  std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster;
   // ...
 
  public:
   FramesPublisherNode() : Node("frames_publisher_node") {
-    // NOTE: This method is run once, when the node is launched.
-
-    // TODO: Instantiate the Transform Broadcaster
-    // ....
+    
+    tf_broadcaster = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
 
     startup_time = now();
     heartbeat = create_timer(this,
@@ -42,7 +40,7 @@ class FramesPublisherNode : public rclcpp::Node {
     //   - use the - operator between the current time and startup_time
     //   - convert the resulting Duration to seconds, store result into a double
 
-    // ...
+    double t = (this->get_clock()->now() - startup_time).seconds();
 
     // Here we declare two geometry_msgs::msg::TransformStamped objects, which
     // need to be populated
@@ -66,7 +64,33 @@ class FramesPublisherNode : public rclcpp::Node {
     //    - check out the ROS tf2 Tutorials:
     //    https://docs.ros.org/en/humble/Tutorials/Intermediate/Tf2/Tf2-Main.html
     //    - consider the setRPY method on a tf2::Quaternion for world_T_av1
+    world_T_av1.header.stamp = this->get_clock()->now();
+    world_T_av1.header.frame_id = "world";
+    world_T_av1.child_frame_id = "av1";
 
+    world_T_av1.transform.translation.x = std::cos(t);
+    world_T_av1.transform.translation.y = std::sin(t);
+    world_T_av1.transform.translation.z = 0.0;
+
+    tf2::Quaternion av1_q;
+    av1_q.setRPY(0,0,t);
+    world_T_av1.transform.rotation.x = av1_q.x();
+    world_T_av1.transform.rotation.y = av1_q.y();
+    world_T_av1.transform.rotation.z = av1_q.z();
+    world_T_av1.transform.rotation.w = av1_q.w();
+
+    world_T_av2.header.stamp = this->get_clock()->now();
+    world_T_av2.header.frame_id = "world";
+    world_T_av2.child_frame_id = "av2";
+
+    world_T_av2.transform.translation.x = std::sin(t);
+    world_T_av2.transform.translation.y = 0.0;
+    world_T_av2.transform.translation.z = std::cos(2*t);
+
+    world_T_av2.transform.rotation.x = 0.0;
+    world_T_av2.transform.rotation.y = 0.0;
+    world_T_av2.transform.rotation.z = 0.0;
+    world_T_av2.transform.rotation.w = 1.0;
     // ...
 
     // 3. TODO: Publish the transforms, namely:
@@ -79,12 +103,14 @@ class FramesPublisherNode : public rclcpp::Node {
     //         2. the frame names are crucial for the rest of the assignment,
     //            make sure they are as specified, "av1", "av2" and "world"
 
-    // ...
+    tf_broadcaster->sendTransform(world_T_av1);
+    tf_broadcaster->sendTransform(world_T_av2);
   }
 };
 
 int main(int argc, char** argv) {
   rclcpp::init(argc, argv);
   rclcpp::spin(std::make_shared<FramesPublisherNode>());
+  rclcpp::shutdown();
   return 0;
 }

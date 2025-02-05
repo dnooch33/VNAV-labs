@@ -1,0 +1,16 @@
+Question 1
+i = 2
+j = 1
+Question 2
+b
+References and Pointers
+Question 1
+10 10
+Question 2
+1764
+Question 3
+0
+Question 4
+0
+ÿ
+0
