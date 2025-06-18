@@ -56,6 +56,11 @@ class ControllerNode : public rclcpp::Node {
   //
   // ~~~~ begin solution
 
+  rclcpp::Subscription<trajectory_msgs::msg::MultiDOFJointTrajectoryPoint>::SharedPtr desired_state_sub_;
+  rclcpp::Subscription<nav_msgs::msgs::Odometry>::SharedPtr current_state_sub_;
+  rclcpp::Publisher<mav_msgs::msg::Actuators>::SharedPtr actuator_pub_;
+  rclcpp::TimerBase::SharedPtr heartbeat;
+
   // ~~~~ end solution
   // ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~
   //                                 end part 1
@@ -79,14 +84,12 @@ class ControllerNode : public rclcpp::Node {
   Eigen::Vector3d x; // current position of the UAV's c.o.m. in the world frame
   Eigen::Vector3d v; // current velocity of the UAV's c.o.m. in the world frame
   Eigen::Matrix3d R; // current orientation of the UAV
-  Eigen::Vector3d
-      omega; // current angular velocity of the UAV's c.o.m. in the *body* frame
+  Eigen::Vector3d omega; // current angular velocity of the UAV's c.o.m. in the *body* frame
 
   // Desired state
   Eigen::Vector3d xd; // desired position of the UAV's c.o.m. in the world frame
   Eigen::Vector3d vd; // desired velocity of the UAV's c.o.m. in the world frame
-  Eigen::Vector3d
-      ad;      // desired acceleration of the UAV's c.o.m. in the world frame
+  Eigen::Vector3d ad;      // desired acceleration of the UAV's c.o.m. in the world frame
   double yawd; // desired yaw angle
 
   int64_t hz; // frequency of the main control loop
@@ -124,6 +127,21 @@ public:
     //  - make sure you start your timer with reset()
     //
     // ~~~~ begin solution
+
+    startup_time = now();
+    desired_state_sub = create_subscription<trajectory_msgs::msg::MultiDOFJointTrajectoryPoint>(
+      "desired_state", 10,
+      std::bind(&controllerNode::onDesiredState, this, std::placeholders::_1));
+
+    current_state_sub = create_subscription<nav_msgs::msg::Odometry>(
+        "current_state", 10,
+        std::bind(&controllerNode::onCurrentState, this, std::placeholders::_1));
+    
+    heartbeat = create_timer(this,
+                             get_clock(),
+                             rclcpp::Duration::from_seconds(0.02),
+                             std::bind(&controllerNode::controlLoop, this));
+    heartbeat->reset();
 
     // ~~~~ end solution
     // ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~
@@ -164,7 +182,13 @@ public:
 
     // this is here to surpress an "unused variable compiler warning"
     // you can remove it when you start writing your answer
-    des_state == des_state;
+    const auto &pos = des_state.transforms[0].translation;
+    const auto &vel = des_state.velocities[0].linear;
+    const auto &acc = des_state.acceleration[0].linear;
+
+    xd << pos.x, pos.y, pos.z;
+    vd << vel.x, vel.y, vel.z;
+    ad << acc.x, acc.y, acc.z;
 
     //
     // 3.2 Extract the yaw component from the quaternion in the incoming ROS
@@ -173,7 +197,9 @@ public:
     //  Hints:
     //    - look into the functions tf2::getYaw(...) and tf2::fromMsg
     //
-
+    tf2::Quaternion q;
+    tf2::fromMsg(des_state.transforms[0].rotation, q);
+    yawd = tf2::getYaw(q);
     //
     // ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~
     //                                 end part 3
@@ -194,8 +220,21 @@ public:
 
     // this is here to surpress an "unused variable compiler warning"
     // you can remove it when you start writing your answer
-    cur_state == cur_state;
+    const auto &pos = cur_state.pose.pose.position;
+    const auto &vel = cur_state.twist.twist.linear;
+    const auto &quat = cur_state.pose.pose.orientation;
+    const auto &omega_msg = cur_state.twist.twist.angular;
 
+    x << pos.x, pos.y, pos.z;
+    v << vel.x, vel.y, vel.z;
+
+    Eigen::Quaterniond qE;
+    tf2::fromMsg(quat, qE);
+    R = qE.toRotationMatrix();
+
+    Eigen::Vector3d omega_w;
+    tf2::fromMsg(omega_msg, omega_w);
+    omega = R.transpose() * omega_w;
     //
     // ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~
     //                                 end part 4
