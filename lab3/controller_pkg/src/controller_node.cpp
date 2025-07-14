@@ -57,7 +57,7 @@ class ControllerNode : public rclcpp::Node {
   // ~~~~ begin solution
 
   rclcpp::Subscription<trajectory_msgs::msg::MultiDOFJointTrajectoryPoint>::SharedPtr desired_state_sub_;
-  rclcpp::Subscription<nav_msgs::msgs::Odometry>::SharedPtr current_state_sub_;
+  rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr current_state_sub_;
   rclcpp::Publisher<mav_msgs::msg::Actuators>::SharedPtr actuator_pub_;
   rclcpp::TimerBase::SharedPtr heartbeat;
 
@@ -78,6 +78,7 @@ class ControllerNode : public rclcpp::Node {
   Eigen::Matrix3d J;   // Inertia Matrix
   Eigen::Vector3d e3;  // [0,0,1]
   Eigen::Matrix4d F2W; // Wrench-rotor speeds map
+  Eigen::Matrix4d W2F;
 
   // Controller internals (you will have to set them below)
   // Current state
@@ -128,19 +129,23 @@ public:
     //
     // ~~~~ begin solution
 
-    startup_time = now();
-    desired_state_sub = create_subscription<trajectory_msgs::msg::MultiDOFJointTrajectoryPoint>(
+    //startup_time = now();
+    desired_state_sub_ = create_subscription<trajectory_msgs::msg::MultiDOFJointTrajectoryPoint>(
       "desired_state", 10,
-      std::bind(&controllerNode::onDesiredState, this, std::placeholders::_1));
+      std::bind(&ControllerNode::onDesiredState, this, std::placeholders::_1));
 
-    current_state_sub = create_subscription<nav_msgs::msg::Odometry>(
+    current_state_sub_ = create_subscription<nav_msgs::msg::Odometry>(
         "current_state", 10,
-        std::bind(&controllerNode::onCurrentState, this, std::placeholders::_1));
+        std::bind(&ControllerNode::onCurrentState, this, std::placeholders::_1));
+
+    actuator_pub_ = create_publisher<mav_msgs::msg::Actuators>(
+      "rotor_speed_cmds", 10
+    );
     
     heartbeat = create_timer(this,
                              get_clock(),
-                             rclcpp::Duration::from_seconds(0.02),
-                             std::bind(&controllerNode::controlLoop, this));
+                             rclcpp::Duration::from_seconds(1.0/hz),
+                             std::bind(&ControllerNode::controlLoop, this));
     heartbeat->reset();
 
     // ~~~~ end solution
@@ -164,6 +169,7 @@ public:
     J << 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0;
     double a = cf * d / sqrt(2);
     F2W << cf, cf, cf, cf, a, a, -a, -a, -a, a, a, -a, cd, -cd, cd, -cd;
+    W2F = F2W.inverse();
   }
 
   void onDesiredState(
@@ -184,7 +190,7 @@ public:
     // you can remove it when you start writing your answer
     const auto &pos = des_state.transforms[0].translation;
     const auto &vel = des_state.velocities[0].linear;
-    const auto &acc = des_state.acceleration[0].linear;
+    const auto &acc = des_state.accelerations[0].linear;
 
     xd << pos.x, pos.y, pos.z;
     vd << vel.x, vel.y, vel.z;
@@ -251,7 +257,8 @@ public:
     // 5.1 Compute position and velocity errors. Objective: fill in ex, ev.
     //  Hint: [1], eq. (6), (7)
     //
-
+    ex = x - xd;
+    ev = v - ev;
     // 5.2 Compute the Rd matrix.
     //
     //  Hint: break it down in 3 parts:
@@ -269,6 +276,18 @@ public:
     //
     // Build b3d vector
 
+    Eigen::Vector3d fd = -kx*ex - kv*ev + m*g*e3 + m*ad;
+    Eigen::Vector3d b3d = fd.normalized();
+    Eigen::Vector3d b1d_tilde;
+    b1d_tilde << std::cos(yawd), std::sin(yawd), 0;
+    Eigen::Vector3d b2d = b3d.cross(b1d_tilde);
+    Eigen::Vector3d b1d = b2d.cross(b3d);
+    b1d.normalize();
+    b2d.normalize();
+
+    Eigen::Matrix3d Rd;
+    Rd << b1d, b2d, b3d;
+
     //
     // 5.3 Compute the orientation error (er) and the rotation-rate error
     // (eomega)
@@ -280,12 +299,15 @@ public:
     //          requires numerical differentiation of Rd and it has negligible
     //          effects on the closed-loop dynamics.
     //
-
+    er = 0.5*Vee(Rd.transpose()*R - R.transpose()*Rd);
+    eomega = omega;
     //
     // 5.4 Compute the desired wrench (force + torques) to control the UAV.
     //  Hints:
     //     - [1] eq. (15), (16)
-
+    double fz = fd.dot(R*e3);
+    Eigen::Vector3d tau = -kr*er - komega*eomega + omega.cross(J*omega);
+    Eigen::Vector4d wrench(fz, tau(0), tau(1), tau(2));
     // CAVEATS:
     //    - Compare the reference frames in the Lab 3 handout with Fig. 1 in the
     //      paper. The z-axes are flipped, which affects the signs of:
@@ -322,14 +344,19 @@ public:
     //       real life, where propellers are aerodynamically optimized to spin
     //       in one direction!
     //
-
+    Eigen::Vector4d W = W2F * wrench;
     //
     // 5.6 Populate and publish the control message
     //
     // Hint: do not forget that the propeller speeds are signed (maybe you want
     // to use signed_sqrt function).
     //
-
+    mav_msgs::msg::Actuators rotor_speed_msg;
+    rotor_speed_msg.angular_velocities.resize(4);
+    for (int i = 0; i < 4; i++){
+      rotor_speed_msg.angular_velocities[i] = signed_sqrt(W(i));
+    }
+    actuator_pub_->publish(rotor_speed_msg);
     //
     // ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~
     //           end part 5, congrats! Start tuning your gains (part 6)
